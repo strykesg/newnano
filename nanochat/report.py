@@ -201,6 +201,8 @@ EXPECTED_FILES = [
     "chat-evaluation-mid.md",
     "chat-sft.md",
     "chat-evaluation-sft.md",
+    "chat-dpo.md",
+    "chat-evaluation-dpo.md",
     "chat-rl.md",
     "chat-evaluation-rl.md",
 ]
@@ -302,6 +304,8 @@ class Report:
                     final_metrics["mid"] = extract(section, chat_metrics)
                 if file_name == "chat-evaluation-sft.md":
                     final_metrics["sft"] = extract(section, chat_metrics)
+                if file_name == "chat-evaluation-dpo.md":
+                    final_metrics["dpo"] = extract(section, chat_metrics)
                 if file_name == "chat-evaluation-rl.md":
                     final_metrics["rl"] = extract(section, "GSM8K") # RL only evals GSM8K
                 # append this section of the report
@@ -319,7 +323,7 @@ class Report:
             # Custom ordering: CORE first, ChatCORE last, rest in middle
             all_metrics = sorted(all_metrics, key=lambda x: (x != "CORE", x == "ChatCORE", x))
             # Fixed column widths
-            stages = ["base", "mid", "sft", "rl"]
+            stages = ["base", "mid", "sft", "dpo", "rl"]
             metric_width = 15
             value_width = 8
             # Write table header

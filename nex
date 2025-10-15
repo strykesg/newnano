@@ -1,0 +1,6 @@
+  Next steps:
+
+  1. Export OPENROUTER_API_KEY (and optionally OPENROUTER_MODELS) before
+  launching bash speedrun.sh.
+  2. Optionally dry-run python -m scripts.synthetic_data_gen --sft-examples 5
+  --dpo-examples 5 to confirm API access prior to the full speedrun.

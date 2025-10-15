@@ -26,6 +26,7 @@ from tasks.common import TaskMixture
 from tasks.arc import ARC
 from tasks.gsm8k import GSM8K
 from tasks.smoltalk import SmolTalk
+from tasks.trader_sft import TraderSFT
 
 # -----------------------------------------------------------------------------
 # SFT Hyperparameters
@@ -50,6 +51,12 @@ init_lr_frac = 0.02
 eval_every = 100
 eval_steps = 100
 eval_metrics_every = 200
+# dataset controls
+sft_dataset = "mixture" # mixture|trader|trader_mix
+trader_data_path = None
+trader_val_fraction = 0.1
+sft_mix_trader = 1
+sft_mix_smoltalk = 1
 # now allow CLI to override the settings via the configurator lol
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open(os.path.join('nanochat', 'configurator.py')).read()) # overrides from command line or config file
@@ -75,13 +82,58 @@ engine = Engine(model, tokenizer) # will be used for inline model evaluation onl
 # -----------------------------------------------------------------------------
 # Task data mixture we'll train on
 
-train_ds = TaskMixture([
-    ARC(subset="ARC-Easy", split="train"), # 2.3K rows
-    ARC(subset="ARC-Challenge", split="train"), # 1.1K rows
-    GSM8K(subset="main", split="train"), # 8K rows
-    SmolTalk(split="train", stop=10_000), # 10K rows of smoltalk
-]) # 2.3K + 1.1K + 8K + 10K = 21.4K rows
-val_ds = SmolTalk(split="test") # general conversations, 24K rows (though we don't actually use all of it)
+
+def _resolve_trader_path(path_override):
+    if path_override:
+        return path_override
+    base_dir = os.environ.get("NANOCHAT_BASE_DIR")
+    if base_dir:
+        base_dir = os.path.expanduser(base_dir)
+    else:
+        base_dir = os.path.join(os.path.expanduser("~"), ".cache", "nanochat")
+    return os.path.join(base_dir, "datasets", "trader_sft_data.jsonl")
+
+
+def _expand_weight(task, weight, name):
+    if weight < 0:
+        raise ValueError(f"{name} weight must be non-negative")
+    if weight == 0:
+        return []
+    return [task for _ in range(weight)]
+
+
+if sft_dataset == "trader":
+    trader_path = _resolve_trader_path(trader_data_path)
+    train_ds = TraderSFT(split="train", data_path=trader_path, val_fraction=trader_val_fraction)
+    val_ds = TraderSFT(split="val", data_path=trader_path, val_fraction=trader_val_fraction)
+elif sft_dataset == "trader_mix":
+    trader_path = _resolve_trader_path(trader_data_path)
+    trader_train = TraderSFT(split="train", data_path=trader_path, val_fraction=trader_val_fraction)
+    smoltalk_train = SmolTalk(split="train", stop=10_000)
+    trader_weight = int(sft_mix_trader)
+    smol_weight = int(sft_mix_smoltalk)
+    tasks = []
+    tasks.extend(_expand_weight(trader_train, trader_weight, "TraderSFT"))
+    tasks.extend(_expand_weight(smoltalk_train, smol_weight, "SmolTalk"))
+    if not tasks:
+        raise ValueError("Task mixture is empty; adjust sft_mix_* weights")
+    train_ds = TaskMixture(tasks)
+    val_components = []
+    val_components.append(TraderSFT(split="val", data_path=trader_path, val_fraction=trader_val_fraction))
+    if smol_weight > 0:
+        val_components.append(SmolTalk(split="test"))
+    if len(val_components) == 1:
+        val_ds = val_components[0]
+    else:
+        val_ds = TaskMixture(val_components)
+else:
+    train_ds = TaskMixture([
+        ARC(subset="ARC-Easy", split="train"), # 2.3K rows
+        ARC(subset="ARC-Challenge", split="train"), # 1.1K rows
+        GSM8K(subset="main", split="train"), # 8K rows
+        SmolTalk(split="train", stop=10_000), # 10K rows of smoltalk
+    ]) # 2.3K + 1.1K + 8K + 10K = 21.4K rows
+    val_ds = SmolTalk(split="test") # general conversations, 24K rows (though we don't actually use all of it)
 
 # -----------------------------------------------------------------------------
 # DataLoader

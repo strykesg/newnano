@@ -71,6 +71,16 @@ python -m scripts.tok_train --max_chars=2000000000
 python -m scripts.tok_eval
 
 # -----------------------------------------------------------------------------
+# Synthetic data generation for Chimera SFT + DPO
+
+if [ -z "$OPENROUTER_API_KEY" ]; then
+    echo "OPENROUTER_API_KEY must be set for synthetic data generation via OpenRouter."
+    exit 1
+fi
+echo "--- Generating Chimera SFT and DPO datasets (OpenRouter) ---"
+python -m scripts.synthetic_data_gen --sft-examples 5000 --dpo-examples 10000
+
+# -----------------------------------------------------------------------------
 # Base model (pretraining)
 
 # Download the eval_bundle from s3 to evaluate CORE metric during training (~162MB)
@@ -109,8 +119,14 @@ torchrun --standalone --nproc_per_node=8 -m scripts.chat_eval -- -i mid
 # Supervised Finetuning (domain adaptation to each sequence all by itself per row)
 
 # train sft and re-eval right away (should see a small bump)
-torchrun --standalone --nproc_per_node=8 -m scripts.chat_sft -- --run=$WANDB_RUN
+torchrun --standalone --nproc_per_node=8 -m scripts.chat_sft -- --run=$WANDB_RUN --sft_dataset=trader_mix --sft_mix_trader=1 --sft_mix_smoltalk=1
 torchrun --standalone --nproc_per_node=8 -m scripts.chat_eval -- -i sft
+
+# -----------------------------------------------------------------------------
+# Direct Preference Optimisation finetuning and eval
+
+torchrun --standalone --nproc_per_node=8 -m scripts.dpo_train -- --run=$WANDB_RUN
+torchrun --standalone --nproc_per_node=8 -m scripts.chat_eval -- -i dpo
 
 # chat with the model over CLI! Leave out the -p to chat interactively
 # python -m scripts.chat_cli -p "Why is the sky blue?"
