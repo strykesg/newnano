@@ -501,6 +501,17 @@ def diagnostics():
         "last_exit_code": STATE["last_exit_code"],
         "last_stdout_tail": STATE["last_stdout"],
         "last_stderr_tail": STATE["last_stderr"],
+        "metrics": {
+            "sft_written_total": STATE["sft_written_total"],
+            "dpo_written_total": STATE["dpo_written_total"],
+            "ingest_requests_total": STATE["ingest_requests_total"],
+            "ingest_rejected_total": STATE["ingest_rejected_total"],
+            "lock_acquire_count": STATE["lock_acquire_count"],
+            "lock_wait_ms_total": STATE["lock_wait_ms_total"],
+            "last_mode": STATE["last_mode"],
+            "last_workers": STATE["last_workers"],
+            "last_enqueued_tasks": STATE["last_enqueued_tasks"],
+        },
     }
 
 
