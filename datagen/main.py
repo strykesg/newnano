@@ -268,42 +268,61 @@ def generator_loop():
             if add_sft > 0 or add_dpo > 0:
                 STATE["last_run_started_at"] = time.time()
                 workers = max(1, int(os.environ.get("WORKERS", "1")))
+                use_celery = os.environ.get("USE_CELERY", "").lower() in {"1", "true", "yes"} and bool(os.environ.get("REDIS_URL"))
                 print(
                     f"[datagen] starting run: add_sft={add_sft} add_dpo={add_dpo} current=({cur_sft},{cur_dpo}) "
-                    f"workers={workers} poll={get_poll_secs()}s"
+                    f"workers={workers} poll={get_poll_secs()}s mode={'celery' if use_celery else 'local'}"
                 )
-                # Always use emit mode so records pass through validation and serialized writes
-                if workers == 1:
-                    rc = run_generator_once(add_sft, add_dpo, emit_mode=True, label="w1/1")
-                    STATE["last_exit_code"] = rc
-                else:
-                    # Determine active workers based on available work
-                    active = max(add_sft, add_dpo)
-                    active_workers = min(workers, max(1, active))
-                    def split_count(total: int, n: int) -> list[int]:
-                        base = total // n
-                        rem = total % n
-                        return [base + (1 if i < rem else 0) for i in range(n)]
-                    sft_parts = split_count(add_sft, active_workers)
-                    dpo_parts = split_count(add_dpo, active_workers)
-                    parts: list[tuple[int, int]] = list(zip(sft_parts, dpo_parts))
-                    print(f"[datagen] worker parts: {parts}")
-                    threads: list[Thread] = []
-                    results: list[int] = []
-                    def run_part(idx: int, s: int, p: int):
-                        label = f"w{idx+1}/{workers}"
-                        print(f"[datagen] launching {label} sft={s} dpo={p}")
-                        rc_i = run_generator_once(s, p, emit_mode=True, label=label)
-                        results.append(rc_i)
-                    for idx, (s, p) in enumerate(parts):
-                        if s <= 0 and p <= 0:
-                            continue
-                        t = Thread(target=run_part, args=(idx, s, p), daemon=True)
-                        threads.append(t)
-                        t.start()
-                    for t in threads:
-                        t.join()
-                    STATE["last_exit_code"] = 0 if results and all(r == 0 for r in results) else (results[0] if results else 1)
+                # Split planned work across active workers
+                active = max(add_sft, add_dpo)
+                active_workers = min(workers, max(1, active))
+                def split_count(total: int, n: int) -> list[int]:
+                    base = total // n
+                    rem = total % n
+                    return [base + (1 if i < rem else 0) for i in range(n)]
+                sft_parts = split_count(add_sft, active_workers)
+                dpo_parts = split_count(add_dpo, active_workers)
+                parts: list[tuple[int, int]] = list(zip(sft_parts, dpo_parts))
+                print(f"[datagen] worker parts: {parts}")
+
+                if use_celery:
+                    try:
+                        from .tasks import generate_batch  # lazy import
+                        task_ids: list[str] = []
+                        for idx, (s, p) in enumerate(parts):
+                            if s <= 0 and p <= 0:
+                                continue
+                            task = generate_batch.delay(int(s), int(p))
+                            task_ids.append(task.id)
+                        STATE["last_exit_code"] = 0
+                        print(f"[datagen] enqueued {len(task_ids)} celery tasks: {task_ids}")
+                    except Exception as err:  # noqa: BLE001
+                        print(f"[datagen] celery enqueue failed, falling back to local: {err}")
+                        use_celery = False
+
+                if not use_celery:
+                    # Local threaded execution using emit/validation path
+                    if active_workers == 1:
+                        rc = run_generator_once(add_sft, add_dpo, emit_mode=True, label="w1/1")
+                        STATE["last_exit_code"] = rc
+                    else:
+                        threads: list[Thread] = []
+                        results: list[int] = []
+                        def run_part(idx: int, s: int, p: int):
+                            label = f"w{idx+1}/{active_workers}"
+                            print(f"[datagen] launching {label} sft={s} dpo={p}")
+                            rc_i = run_generator_once(s, p, emit_mode=True, label=label)
+                            results.append(rc_i)
+                        for idx, (s, p) in enumerate(parts):
+                            if s <= 0 and p <= 0:
+                                continue
+                            t = Thread(target=run_part, args=(idx, s, p), daemon=True)
+                            threads.append(t)
+                            t.start()
+                        for t in threads:
+                            t.join()
+                        STATE["last_exit_code"] = 0 if results and all(r == 0 for r in results) else (results[0] if results else 1)
+
                 STATE["last_run_finished_at"] = time.time()
                 print(f"[datagen] finished run: rc={STATE['last_exit_code']}")
             else:
