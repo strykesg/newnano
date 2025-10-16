@@ -314,6 +314,9 @@ def generate_dataset(
         writer.write("\n")
         produced += 1
         progress.update(1)
+        # Emit a newline-terminated progress line so logs stream line-by-line in containers
+        print(f"[gen] produced {produced}/{total} for {description}")
+        writer.flush()
         if produced % 50 == 0:
             writer.flush()
     progress.close()
