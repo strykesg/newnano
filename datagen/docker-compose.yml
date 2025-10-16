@@ -16,17 +16,17 @@ services:
       # Dataset targets
       - SFT_TARGET=${SFT_TARGET:-0}
       - DPO_TARGET=${DPO_TARGET:-0}
-      - DATAGEN_POLL_SECS=${DATAGEN_POLL_SECS:-60}
+      - DATAGEN_POLL_SECS=${DATAGEN_POLL_SECS:-15}
       # Automatic increments per poll when no remaining target work
-      - SFT_INCREMENT=${SFT_INCREMENT:-10}
-      - DPO_INCREMENT=${DPO_INCREMENT:-10}
+      - SFT_INCREMENT=${SFT_INCREMENT:-2}
+      - DPO_INCREMENT=${DPO_INCREMENT:-2}
       # Base dir for datasets (mounted volume)
       - NANOCHAT_BASE_DIR=/data
       # Server options
       - HOST=0.0.0.0
       - PORT=8981
       # Parallel workers
-      - WORKERS=${WORKERS:-1}
+      - WORKERS=${WORKERS:-5}
       - REDIS_URL=${REDIS_URL}
     # For local testing, uncomment to expose the service
     # ports:
@@ -52,7 +52,9 @@ services:
       - OPENROUTER_TITLE=${OPENROUTER_TITLE:-OOGA}
       - REDIS_URL=${REDIS_URL}
       - PORT=8981
-    command: sh -c "celery -A datagen.celery_app.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-2}"
+      - CELERY_CONCURRENCY=${CELERY_CONCURRENCY:-4}
+      - CELERY_INSTANCES=${CELERY_INSTANCES:-5}
+    command: sh -c 'i=1; while [ $i -le ${CELERY_INSTANCES:-5} ]; do echo "Starting Celery worker $i/${CELERY_INSTANCES:-5} with concurrency ${CELERY_CONCURRENCY:-4}"; celery -A datagen.celery_app.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-4} --hostname=%h-w$i & i=$$((i+1)); done; wait'
     restart: unless-stopped
 
 volumes:
