@@ -393,6 +393,29 @@ def ingest(record: dict = Body(...)):
     return {"ok": True, "type": "sft" if is_sft else "dpo"}
 
 
+@app.get("/resetfiles")
+def resetfiles():
+    # Safely remove current dataset files so generation can restart from zero
+    data_dir = get_dataset_dir()
+    sft_path = data_dir / "trader_sft_data.jsonl"
+    dpo_path = data_dir / "trader_dpo_data.jsonl"
+    removed = []
+    with WRITE_LOCK:
+        try:
+            if sft_path.exists():
+                sft_path.unlink()
+                removed.append(str(sft_path))
+        except Exception as err:  # noqa: BLE001
+            return {"ok": False, "error": f"failed to remove {sft_path}: {err}"}
+        try:
+            if dpo_path.exists():
+                dpo_path.unlink()
+                removed.append(str(dpo_path))
+        except Exception as err:  # noqa: BLE001
+            return {"ok": False, "error": f"failed to remove {dpo_path}: {err}"}
+    return {"ok": True, "removed": removed, "dataset_dir": str(data_dir)}
+
+
 @app.post("/enqueue")
 def enqueue(sft: int = 0, dpo: int = 0):
     # Enqueue a generation job via Celery
