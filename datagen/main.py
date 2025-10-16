@@ -4,6 +4,8 @@ import os
 import threading
 import time
 from pathlib import Path
+import shutil
+import getpass
 from typing import Optional
 
 from fastapi import FastAPI
@@ -46,6 +48,8 @@ STATE = {
     "last_exit_code": None,  # type: Optional[int]
     "last_run_started_at": None,
     "last_run_finished_at": None,
+    "last_stdout": "",
+    "last_stderr": "",
 }
 
 
@@ -109,6 +113,9 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int) -> int:
         # Surface error to container logs
         print(proc.stdout)
         print(proc.stderr)
+    # Store limited logs for diagnostics
+    STATE["last_stdout"] = proc.stdout[-8000:]
+    STATE["last_stderr"] = proc.stderr[-8000:]
     return proc.returncode
 
 
@@ -158,6 +165,7 @@ def index():
         "message": "nanochat datagen",
         "status": "/status",
         "datasets": "/datasets/",
+        "diagnostics": "/diagnostics",
     }
 
 
@@ -166,17 +174,73 @@ def status():
     target_sft, target_dpo = desired_sizes()
     cur_sft, cur_dpo = current_line_counts()
     data_dir = str(get_dataset_dir())
+    writable, write_error = test_write_access(get_dataset_dir())
     return {
         "running": STATE["running"],
         "targets": {"sft": target_sft, "dpo": target_dpo},
         "current": {"sft": cur_sft, "dpo": cur_dpo},
         "dataset_dir": data_dir,
+        "dataset_dir_writable": writable,
+        "dataset_dir_error": write_error,
         "sft_url": "/datasets/trader_sft_data.jsonl",
         "dpo_url": "/datasets/trader_dpo_data.jsonl",
         "last_exit_code": STATE["last_exit_code"],
         "last_run_started_at": STATE["last_run_started_at"],
         "last_run_finished_at": STATE["last_run_finished_at"],
         "poll_secs": get_poll_secs(),
+    }
+
+
+def mask(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    if len(s) <= 6:
+        return "***"
+    return s[:3] + "***" + s[-3:]
+
+
+def test_write_access(path: Path) -> tuple[bool, Optional[str]]:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_probe.tmp"
+        with probe.open("w", encoding="utf-8") as f:
+            f.write("ok")
+        probe.unlink(missing_ok=True)
+        return True, None
+    except Exception as err:  # noqa: BLE001
+        return False, str(err)
+
+
+@app.get("/diagnostics")
+def diagnostics():
+    dataset = get_dataset_dir()
+    writable, write_error = test_write_access(dataset)
+    total, used, free = shutil.disk_usage(dataset)
+    inc_sft, inc_dpo = desired_increments()
+    env_info = {
+        "OPENROUTER_API_KEY_present": bool(os.environ.get("OPENROUTER_API_KEY")),
+        "OPENROUTER_API_KEY_masked": mask(os.environ.get("OPENROUTER_API_KEY")),
+        "OPENROUTER_MODELS": os.environ.get("OPENROUTER_MODELS"),
+        "OPENROUTER_REFERRER": os.environ.get("OPENROUTER_REFERRER"),
+        "OPENROUTER_TITLE": os.environ.get("OPENROUTER_TITLE"),
+        "SFT_TARGET": os.environ.get("SFT_TARGET", "0"),
+        "DPO_TARGET": os.environ.get("DPO_TARGET", "0"),
+        "SFT_INCREMENT": str(inc_sft),
+        "DPO_INCREMENT": str(inc_dpo),
+        "DATAGEN_POLL_SECS": str(get_poll_secs()),
+    }
+    return {
+        "user": getpass.getuser(),
+        "uid": os.getuid(),
+        "gid": os.getgid(),
+        "dataset_dir": str(dataset),
+        "dataset_dir_writable": writable,
+        "dataset_dir_error": write_error,
+        "disk": {"total": total, "used": used, "free": free},
+        "env": env_info,
+        "last_exit_code": STATE["last_exit_code"],
+        "last_stdout_tail": STATE["last_stdout"],
+        "last_stderr_tail": STATE["last_stderr"],
     }
 
 
