@@ -103,6 +103,40 @@ def current_line_counts() -> tuple[int, int]:
     return count_lines(sft_path), count_lines(dpo_path)
 
 
+def _trim_file_to_max_lines(path: Path, max_lines: int) -> None:
+    """Trim a JSONL file to at most max_lines, preserving the earliest lines.
+
+    Uses a temp file and atomic move while holding WRITE_LOCK to avoid races.
+    """
+    if max_lines <= 0:
+        # Remove file entirely if target is zero
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return
+    if not path.exists():
+        return
+    try:
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        written = 0
+        with path.open("r", encoding="utf-8") as rf, tmp_path.open("w", encoding="utf-8") as wf:
+            for line in rf:
+                if written >= max_lines:
+                    break
+                wf.write(line)
+                written += 1
+        # Replace original
+        tmp_path.replace(path)
+    except Exception:
+        # Best-effort trimming; leave file as-is on error
+        try:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def _stream_pipe(pipe, prefix: str, buffer: list[str], print_lines: bool = True) -> None:
     try:
         for line in iter(pipe.readline, ""):
@@ -271,14 +305,29 @@ def generator_loop():
             target_sft, target_dpo = desired_sizes()
             cur_sft, cur_dpo = current_line_counts()
 
+            # Enforce hard caps by trimming if we exceeded targets
+            if target_sft > 0 and cur_sft > target_sft:
+                STATE["lock_acquire_count"] += 1
+                with WRITE_LOCK:
+                    _trim_file_to_max_lines(get_dataset_dir() / "trader_sft_data.jsonl", target_sft)
+                # Recount after trimming
+                cur_sft, _ = current_line_counts()
+            if target_dpo > 0 and cur_dpo > target_dpo:
+                STATE["lock_acquire_count"] += 1
+                with WRITE_LOCK:
+                    _trim_file_to_max_lines(get_dataset_dir() / "trader_dpo_data.jsonl", target_dpo)
+                # Recount after trimming
+                _, cur_dpo = current_line_counts()
+
             add_sft = max(0, target_sft - cur_sft)
             add_dpo = max(0, target_dpo - cur_dpo)
 
             inc_sft, inc_dpo = desired_increments()
-            # If there is no remaining target work for a split, fall back to increments
-            if add_sft == 0 and inc_sft > 0:
+            # Only apply increments when the target is unset (0). If a non-zero
+            # target is set and reached, do not continue growing that split.
+            if target_sft == 0 and add_sft == 0 and inc_sft > 0:
                 add_sft = inc_sft
-            if add_dpo == 0 and inc_dpo > 0:
+            if target_dpo == 0 and add_dpo == 0 and inc_dpo > 0:
                 add_dpo = inc_dpo
 
             if add_sft > 0 or add_dpo > 0:
