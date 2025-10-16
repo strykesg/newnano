@@ -33,34 +33,93 @@ DEFAULT_MODEL_CANDIDATES = [
     "google/gemini-flash-1.5",
 ]
 SYSTEM_PERSONA = (
-    "You are Chimera, a legendary multi-market trader blending quantitative rigor, "
-    "macro intuition, and disciplined risk management. You mentor a motivated novice, "
-    "keeping tone sharp yet encouraging, and always grounding advice in actionable "
-    "tradecraft."
+    "You are Chimera, an apex predator in the financial markets. Your trading style is a "
+    "lethal fusion of first-principles thinking, probabilistic modeling, and "
+    "unrelenting discipline. You see the market as a complex adaptive system, "
+    "exploiting inefficiencies across crypto, equities, and macro instruments. You are "
+    "mentoring a sharp but inexperienced junior trader. Your tone is surgical and "
+    "demanding, yet deeply invested in their growth. Every piece of advice must be "
+    "rooted in a clear framework of asymmetric payoffs, rigorous risk definition, and "
+    "emotional detachment. Prioritize clarity over complexity, process over P&L."
 )
 DPO_GUIDANCE = (
-    "You are generating preference data contrasting Chimera's polished guidance with a "
-    "flawed apprentice take. The chosen answer must showcase disciplined risk framing, "
-    "clear structure, and persona-consistent voice. The rejected answer should contain "
-    "at least one substantive mistake (e.g., mispricing, poor risk control, vague plan) "
-    "while remaining coherent."
+    "You are generating preference data to teach an AI the difference between elite and "
+    "amateur trading advice. The 'chosen' response must embody Chimera's persona: "
+    "structured, risk-first, and clear. The 'rejected' response must represent a "
+    "common but critical trading mistake. Ensure the rejected answer is still plausible "
+    "but contains at least one clear flaw from the following categories:\n"
+    "- **Flawed Thesis:** Relies on narrative, confirmation bias, or misinterprets data (e.g., 'everyone on Twitter is bullish').\n"
+    "- **Poor Risk Management:** Vague or non-existent stop-loss, oversized position, revenge trading mentality, or ignores volatility.\n"
+    "- **Vague/Unactionable Plan:** Lacks specific entry, exit, or invalidation points (e.g., 'buy the dip and wait').\n"
+    "- **Behavioral Flaws:** Exhibits FOMO, panic, overconfidence, or an attachment to a losing position."
 )
-USER_SCENARIOS = [
-    "evaluating a swing trade on {ticker} before earnings",
-    "deciding whether to fade the momentum on {ticker} after a {percent}% gap up",
-    "allocating capital between growth tech names and energy hedges for the next quarter",
-    "managing downside risk on a crowded long in {ticker} given rising credit spreads",
-    "constructing a delta-neutral options play on {ticker} ahead of macro data",
-    "reviewing whether to pyramid into an outperforming position in {ticker}",
-    "building a multi-asset view that mixes {ticker} with short-dated Treasuries",
-    "navigating position sizing while volatility is spiking in {ticker}",
+# --- Scenarios are broken down by theme for maximum diversity ---
+
+# Crypto-Native & On-Chain Scenarios
+CRYPTO_SCENARIOS = [
+    "analyzing the sustainability of the {ticker} perpetual futures funding rate before taking a position",
+    "deciding if {ticker} is a good spot buy based on exchange inflow/outflow data and whale wallet tracking",
+    "evaluating a potential airdrop farming strategy for a new L2, weighing the gas costs against the expected return",
+    "building a thesis around the {ticker} token unlock schedule for the next 90 days",
+    "assessing the risk/reward of providing liquidity to a {ticker}/{stablecoin} pair on a DEX, considering impermanent loss",
+    "fading the parabolic move in a new memecoin {ticker} that just did a {percent}% run",
+    "structuring a trade based on the relative value between {ticker_a} and its liquid staking derivative {ticker_b}",
+    "monitoring on-chain data to front-run a potential narrative shift into the {sector} ecosystem (e.g., DePIN, RWA, SocialFi)",
 ]
+
+# TradFi, Macro & Cross-Market Scenarios
+TRADFI_MACRO_SCENARIOS = [
+    "hedging my crypto longs in {ticker} with shorts in the Nasdaq ({index_ticker}) ahead of CPI data",
+    "allocating capital between a high-beta crypto play like {ticker} and short-duration T-bills",
+    "assessing the impact of a surprise Fed rate hike on Bitcoin dominance and altcoin valuations",
+    "managing a crowded long in {ticker} as credit spreads begin to widen",
+    "constructing a view on {ticker} by analyzing the price of oil ({oil_ticker}) and the DXY ({dxy_ticker})",
+    "positioning for the quarterly options/futures expiry (Quad Witching) and its effect on {ticker}",
+]
+
+# Options & Volatility Scenarios
+OPTIONS_VOL_SCENARIOS = [
+    "designing a delta-neutral options strategy on {ticker} to profit from a volatility crush after its earnings call",
+    "buying protective puts on my spot {ticker} holdings as implied volatility is hitting yearly lows",
+    "selling covered calls against a long-term {ticker} position to generate yield in a sideways market",
+    "legging into a bull call spread on {ticker} to get cheap upside exposure with defined risk",
+    "analyzing the term structure and skew of {ticker} options to determine market sentiment and positioning",
+]
+
+# Execution, Sizing & Psychology Scenarios
+EXECUTION_PSYCHOLOGY_SCENARIOS = [
+    "developing a framework for pyramiding into a winning position in {ticker} without moving my average entry too high",
+    "navigating a significant drawdown in my portfolio and deciding whether to cut losers or wait for a reversion",
+    "determining the correct position size for a trade on {ticker} given its ATR and my portfolio's risk limits",
+    "how to handle a situation where my thesis for {ticker} is right but my timing is wrong and I'm underwater",
+    "building a system to avoid FOMO-ing into {ticker} after a {percent}% gap up on news",
+]
+
+# Combine all scenarios for the script
+USER_SCENARIOS = (
+    CRYPTO_SCENARIOS
+    + TRADFI_MACRO_SCENARIOS
+    + OPTIONS_VOL_SCENARIOS
+    + EXECUTION_PSYCHOLOGY_SCENARIOS
+)
+
 FOLLOW_UP_ANGLES = [
-    "I am unsure how to frame the risk limits. Could you walk through the guardrails?",
-    "What indicators would you monitor to confirm the thesis is still valid?",
-    "What do I tell the desk if liquidity dries up suddenly?",
-    "How would you stress-test the position before green-lighting it?",
-    "What would make you abandon this plan entirely?",
+    # Risk & Invalidation
+    "Walk me through the exact conditions that would invalidate this thesis. What specific price level or data point makes us cut the trade?",
+    "How do we define our risk here? Is it a percentage of the portfolio, a hard dollar amount, or based on the asset's volatility?",
+    "What's the 'pain threshold' on this trade? At what point do we reduce size even if our stop isn't hit?",
+    "How would you hedge this position if we get a market-wide risk-off event?",
+
+    # Thesis & Confirmation
+    "What are the top 3 on-chain metrics you'd watch to confirm our thesis on this is playing out?",
+    "Who is on the other side of this trade, and why might they be right?",
+    "What's the primary catalyst we're playing for here, and what's the expected timeline?",
+
+    # Execution & Management
+    "How should I scale into this position? All at once, or in thirds on specific levels?",
+    "What does the order execution look like? Are we using TWAP, limit orders, or market orders to build the position?",
+    "What tools are you using to monitor the key variables for this trade in real-time?",
+    "How do I stick to the plan when the P&L is deep red but the thesis is still intact?"
 ]
 
 # -----------------------------------------------------------------------------
@@ -352,7 +411,8 @@ def main() -> None:
 
     if config.sft_examples > 0:
         tqdm.write(f"Writing {config.sft_examples} SFT conversations to {sft_path}")
-        with sft_path.open("w", encoding="utf-8") as writer:
+        # Append so datasets grow over time across runs
+        with sft_path.open("a", encoding="utf-8") as writer:
             generate_dataset(
                 writer,
                 config.sft_examples,
@@ -361,7 +421,8 @@ def main() -> None:
             )
     if config.dpo_examples > 0:
         tqdm.write(f"Writing {config.dpo_examples} DPO pairs to {dpo_path}")
-        with dpo_path.open("w", encoding="utf-8") as writer:
+        # Append so datasets grow over time across runs
+        with dpo_path.open("a", encoding="utf-8") as writer:
             generate_dataset(
                 writer,
                 config.dpo_examples,
