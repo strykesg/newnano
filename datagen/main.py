@@ -9,6 +9,7 @@ import getpass
 from typing import Optional
 
 from fastapi import FastAPI
+from fastapi import Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -354,6 +355,34 @@ def status():
         "last_run_finished_at": STATE["last_run_finished_at"],
         "poll_secs": get_poll_secs(),
     }
+
+
+@app.post("/ingest")
+def ingest(record: dict = Body(...)):
+    # Validate and append a single record (SFT or DPO)
+    is_sft = _is_valid_sft(record)
+    is_dpo = _is_valid_dpo(record) if not is_sft else False
+    if not is_sft and not is_dpo:
+        return {"ok": False, "error": "invalid record"}
+    target_path = (
+        get_dataset_dir() / ("trader_sft_data.jsonl" if is_sft else "trader_dpo_data.jsonl")
+    )
+    with WRITE_LOCK:
+        with target_path.open("a", encoding="utf-8") as wf:
+            wf.write(json.dumps(record, ensure_ascii=False))
+            wf.write("\n")
+    return {"ok": True, "type": "sft" if is_sft else "dpo"}
+
+
+@app.post("/enqueue")
+def enqueue(sft: int = 0, dpo: int = 0):
+    # Enqueue a generation job via Celery
+    try:
+        from .tasks import generate_batch
+    except Exception as err:  # noqa: BLE001
+        return {"ok": False, "error": f"celery not available: {err}"}
+    result = generate_batch.delay(int(sft), int(dpo))
+    return {"ok": True, "task_id": result.id, "sft": int(sft), "dpo": int(dpo)}
 
 
 def mask(s: Optional[str]) -> str:

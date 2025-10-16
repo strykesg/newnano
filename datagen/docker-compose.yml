@@ -27,11 +27,32 @@ services:
       - PORT=8981
       # Parallel workers
       - WORKERS=${WORKERS:-1}
+      - REDIS_URL=${REDIS_URL}
     # For local testing, uncomment to expose the service
     # ports:
     #   - "8981:8981"
     volumes:
       - datagen_data:/data
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: ..
+      dockerfile: datagen/Dockerfile
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim}
+    image: nanochat-datagen:latest
+    container_name: nanochat-datagen-worker
+    depends_on:
+      - datagen
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODELS=${OPENROUTER_MODELS:-}
+      - OPENROUTER_REFERRER=${OPENROUTER_REFERRER:-BRADDLEZ}
+      - OPENROUTER_TITLE=${OPENROUTER_TITLE:-OOGA}
+      - REDIS_URL=${REDIS_URL}
+      - PORT=8981
+    command: bash -lc "celery -A datagen.celery_app.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-2}"
     restart: unless-stopped
 
 volumes:
