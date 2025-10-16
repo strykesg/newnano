@@ -15,6 +15,7 @@ import uvicorn
 
 # We will call into the existing generator script via subprocess to avoid importing heavy deps at module import time
 import subprocess
+from threading import Thread
 from contextlib import asynccontextmanager
 
 
@@ -90,6 +91,24 @@ def current_line_counts() -> tuple[int, int]:
     return count_lines(sft_path), count_lines(dpo_path)
 
 
+def _stream_pipe(pipe, prefix: str, buffer: list[str]) -> None:
+    try:
+        for line in iter(pipe.readline, ""):
+            if not line:
+                break
+            # Emit to container logs with a stable prefix
+            print(f"{prefix} {line.rstrip()}")
+            # Keep a rolling buffer
+            buffer.append(line)
+            if len(buffer) > 400:  # cap memory
+                del buffer[: len(buffer) - 400]
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
 def run_generator_once(sft_to_add: int, dpo_to_add: int) -> int:
     """Run the generator script once to add the requested number of samples.
 
@@ -111,15 +130,31 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int) -> int:
     # Allow a max runtime per cycle to avoid long blocking runs
     max_seconds = int(os.environ.get("MAX_RUN_SECONDS", "600"))
     try:
-        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        out_buf: list[str] = []
+        err_buf: list[str] = []
+        t_out = Thread(target=_stream_pipe, args=(proc.stdout, "[gen][out]", out_buf), daemon=True)
+        t_err = Thread(target=_stream_pipe, args=(proc.stderr, "[gen][err]", err_buf), daemon=True)
+        t_out.start()
+        t_err.start()
         try:
-            stdout, stderr = proc.communicate(timeout=max_seconds)
-            rc = proc.returncode
+            rc = proc.wait(timeout=max_seconds)
         except subprocess.TimeoutExpired:
             proc.kill()
-            stdout, stderr = proc.communicate()
             rc = 124  # timeout code
             print(f"[datagen] generator timed out after {max_seconds}s; will continue next cycle")
+        # Ensure threads finished reading
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+        stdout = "".join(out_buf)
+        stderr = "".join(err_buf)
     except Exception as err:  # noqa: BLE001
         stdout, stderr = "", f"spawn error: {err}"
         rc = 1
