@@ -517,6 +517,18 @@ def enqueue(sft: int = 0, dpo: int = 0):
     return {"ok": True, "task_id": result.id, "sft": int(sft), "dpo": int(dpo)}
 
 
+@app.get("/clearqueue")
+def clearqueue():
+    # Clear all pending tasks from the Redis queue
+    try:
+        from .celery_app import celery_app
+        # Purge all tasks from the default queue
+        purged = celery_app.control.purge()
+        return {"ok": True, "purged": purged}
+    except Exception as err:  # noqa: BLE001
+        return {"ok": False, "error": f"failed to clear queue: {err}"}
+
+
 def mask(s: Optional[str]) -> str:
     if not s:
         return ""
