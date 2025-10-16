@@ -52,7 +52,7 @@ services:
       - OPENROUTER_TITLE=${OPENROUTER_TITLE:-OOGA}
       - REDIS_URL=${REDIS_URL}
       - PORT=8981
-    command: bash -lc "celery -A datagen.celery_app.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-2}"
+    command: sh -c "celery -A datagen.celery_app.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY:-2}"
     restart: unless-stopped
 
 volumes:

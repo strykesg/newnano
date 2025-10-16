@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy the required Python sources for runtime
 COPY scripts/synthetic_data_gen.py /app/scripts/synthetic_data_gen.py
-COPY datagen/main.py /app/datagen/main.py
+COPY datagen /app/datagen
 
 ENV PYTHONUNBUFFERED=1
 
