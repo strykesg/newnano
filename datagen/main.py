@@ -15,8 +15,9 @@ import uvicorn
 
 # We will call into the existing generator script via subprocess to avoid importing heavy deps at module import time
 import subprocess
-from threading import Thread
+from threading import Thread, Lock
 from contextlib import asynccontextmanager
+import json
 
 
 def get_poll_secs() -> int:
@@ -109,7 +110,7 @@ def _stream_pipe(pipe, prefix: str, buffer: list[str]) -> None:
             pass
 
 
-def run_generator_once(sft_to_add: int, dpo_to_add: int) -> int:
+def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = False) -> int:
     """Run the generator script once to add the requested number of samples.
 
     Returns the process return code.
@@ -124,6 +125,9 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int) -> int:
         "--dpo-examples",
         str(dpo_to_add),
     ]
+    if emit_mode:
+        cmd.append("--emit-to-stdout")
+        cmd.append("--quiet")
     env = os.environ.copy()
     # Ensure dataset dir exists per NANOCHAT_BASE_DIR
     get_dataset_dir()
@@ -140,7 +144,31 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int) -> int:
         )
         out_buf: list[str] = []
         err_buf: list[str] = []
-        t_out = Thread(target=_stream_pipe, args=(proc.stdout, "[gen][out]", out_buf), daemon=True)
+        if emit_mode:
+            def consume_and_write():
+                assert proc.stdout is not None
+                for line in iter(proc.stdout.readline, ""):
+                    if not line:
+                        break
+                    line_stripped = line.rstrip()
+                    print(f"[gen][out] {line_stripped}")
+                    try:
+                        obj = json.loads(line_stripped)
+                    except Exception:
+                        out_buf.append(line)
+                        continue
+                    # Select target file based on record shape
+                    if isinstance(obj, dict) and "messages" in obj:
+                        target_path = get_dataset_dir() / "trader_sft_data.jsonl"
+                    else:
+                        target_path = get_dataset_dir() / "trader_dpo_data.jsonl"
+                    with WRITE_LOCK:
+                        with target_path.open("a", encoding="utf-8") as wf:
+                            wf.write(json.dumps(obj, ensure_ascii=False))
+                            wf.write("\n")
+            t_out = Thread(target=consume_and_write, daemon=True)
+        else:
+            t_out = Thread(target=_stream_pipe, args=(proc.stdout, "[gen][out]", out_buf), daemon=True)
         t_err = Thread(target=_stream_pipe, args=(proc.stderr, "[gen][err]", err_buf), daemon=True)
         t_out.start()
         t_err.start()
@@ -190,10 +218,37 @@ def generator_loop():
             if add_sft > 0 or add_dpo > 0:
                 STATE["last_run_started_at"] = time.time()
                 print(f"[datagen] starting run: add_sft={add_sft} add_dpo={add_dpo} current=({cur_sft},{cur_dpo})")
-                rc = run_generator_once(add_sft, add_dpo)
-                STATE["last_exit_code"] = rc
+                workers = max(1, int(os.environ.get("WORKERS", "1")))
+                if workers == 1:
+                    rc = run_generator_once(add_sft, add_dpo)
+                    STATE["last_exit_code"] = rc
+                else:
+                    # Split work across workers as evenly as possible
+                    parts: list[tuple[int, int]] = []
+                    rem_sft, rem_dpo = add_sft, add_dpo
+                    for i in range(workers):
+                        remaining_workers = workers - i
+                        s = rem_sft // remaining_workers
+                        p = rem_dpo // remaining_workers
+                        parts.append((s, p))
+                        rem_sft -= s
+                        rem_dpo -= p
+                    threads: list[Thread] = []
+                    results: list[int] = []
+                    def run_part(s: int, p: int):
+                        rc_i = run_generator_once(s, p, emit_mode=True)
+                        results.append(rc_i)
+                    for s, p in parts:
+                        if s <= 0 and p <= 0:
+                            continue
+                        t = Thread(target=run_part, args=(s, p), daemon=True)
+                        threads.append(t)
+                        t.start()
+                    for t in threads:
+                        t.join()
+                    STATE["last_exit_code"] = 0 if results and all(r == 0 for r in results) else (results[0] if results else 1)
                 STATE["last_run_finished_at"] = time.time()
-                print(f"[datagen] finished run: rc={rc}")
+                print(f"[datagen] finished run: rc={STATE['last_exit_code']}")
             else:
                 print(
                     f"[datagen] no work: targets=({target_sft},{target_dpo}) current=({cur_sft},{cur_dpo}) "
@@ -208,6 +263,9 @@ def generator_loop():
 # Mount static hosting of the datasets directory at /datasets
 datasets_dir = get_dataset_dir()
 app.mount("/datasets", StaticFiles(directory=str(datasets_dir)), name="datasets")
+
+# Serialize dataset file writes when running multiple workers
+WRITE_LOCK = Lock()
 
 
 @app.get("/")

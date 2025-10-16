@@ -386,6 +386,8 @@ def main() -> None:
     parser.add_argument("--sft-examples", type=int, default=0, help="Number of SFT conversations to generate")
     parser.add_argument("--dpo-examples", type=int, default=0, help="Number of DPO preference pairs to generate")
     parser.add_argument("--seed", type=int, default=1337, help="Random seed")
+    parser.add_argument("--emit-to-stdout", action="store_true", help="Emit JSONL records to stdout instead of writing files")
+    parser.add_argument("--quiet", action="store_true", help="Reduce logging (useful when emitting to stdout)")
     args = parser.parse_args()
 
     config = GenerationConfig(
@@ -400,9 +402,11 @@ def main() -> None:
 
     client = build_client()
     candidates = resolve_model_candidates()
-    tqdm.write(f"Candidate models: {', '.join(candidates)}")
+    if not args.quiet:
+        tqdm.write(f"Candidate models: {', '.join(candidates)}")
     model = find_working_model(client, candidates)
-    tqdm.write(f"Using OpenRouter model: {model}")
+    if not args.quiet:
+        tqdm.write(f"Using OpenRouter model: {model}")
 
     dataset_dir = get_dataset_dir()
     dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -410,25 +414,37 @@ def main() -> None:
     dpo_path = dataset_dir / "trader_dpo_data.jsonl"
 
     if config.sft_examples > 0:
-        tqdm.write(f"Writing {config.sft_examples} SFT conversations to {sft_path}")
-        # Append so datasets grow over time across runs
-        with sft_path.open("a", encoding="utf-8") as writer:
-            generate_dataset(
-                writer,
-                config.sft_examples,
-                lambda: generate_sft_example(client, model, config),
-                "Trader SFT",
-            )
+        if args.emit_to_stdout:
+            # Emit SFT records as JSONL to stdout
+            for _ in range(config.sft_examples):
+                record = generate_sft_example(client, model, config)
+                print(json.dumps(record, ensure_ascii=False))
+        else:
+            tqdm.write(f"Writing {config.sft_examples} SFT conversations to {sft_path}")
+            # Append so datasets grow over time across runs
+            with sft_path.open("a", encoding="utf-8") as writer:
+                generate_dataset(
+                    writer,
+                    config.sft_examples,
+                    lambda: generate_sft_example(client, model, config),
+                    "Trader SFT",
+                )
     if config.dpo_examples > 0:
-        tqdm.write(f"Writing {config.dpo_examples} DPO pairs to {dpo_path}")
-        # Append so datasets grow over time across runs
-        with dpo_path.open("a", encoding="utf-8") as writer:
-            generate_dataset(
-                writer,
-                config.dpo_examples,
-                lambda: generate_dpo_example(client, model, config),
-                "Trader DPO",
-            )
+        if args.emit_to_stdout:
+            # Emit DPO records as JSONL to stdout
+            for _ in range(config.dpo_examples):
+                record = generate_dpo_example(client, model, config)
+                print(json.dumps(record, ensure_ascii=False))
+        else:
+            tqdm.write(f"Writing {config.dpo_examples} DPO pairs to {dpo_path}")
+            # Append so datasets grow over time across runs
+            with dpo_path.open("a", encoding="utf-8") as writer:
+                generate_dataset(
+                    writer,
+                    config.dpo_examples,
+                    lambda: generate_dpo_example(client, model, config),
+                    "Trader DPO",
+                )
 
 
 if __name__ == "__main__":
