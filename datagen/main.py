@@ -92,13 +92,14 @@ def current_line_counts() -> tuple[int, int]:
     return count_lines(sft_path), count_lines(dpo_path)
 
 
-def _stream_pipe(pipe, prefix: str, buffer: list[str]) -> None:
+def _stream_pipe(pipe, prefix: str, buffer: list[str], print_lines: bool = True) -> None:
     try:
         for line in iter(pipe.readline, ""):
             if not line:
                 break
-            # Emit to container logs with a stable prefix
-            print(f"{prefix} {line.rstrip()}")
+            # Optionally emit to container logs with a stable prefix
+            if print_lines:
+                print(f"{prefix} {line.rstrip()}")
             # Keep a rolling buffer
             buffer.append(line)
             if len(buffer) > 400:  # cap memory
@@ -147,12 +148,12 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
         if emit_mode:
             def consume_and_write():
                 assert proc.stdout is not None
+                sft_written = 0
+                dpo_written = 0
                 for line in iter(proc.stdout.readline, ""):
                     if not line:
                         break
                     line_stripped = line.rstrip()
-                    prefix = f"[gen][{label}][out]" if label else "[gen][out]"
-                    print(f"{prefix} {line_stripped}")
                     try:
                         obj = json.loads(line_stripped)
                     except Exception:
@@ -167,12 +168,20 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
                         with target_path.open("a", encoding="utf-8") as wf:
                             wf.write(json.dumps(obj, ensure_ascii=False))
                             wf.write("\n")
+                    if target_path.name.startswith("trader_sft_"):
+                        sft_written += 1
+                    else:
+                        dpo_written += 1
+                # Completion summary per worker
+                if label:
+                    print(f"[datagen] {label} completed: sft={sft_written} dpo={dpo_written}")
             t_out = Thread(target=consume_and_write, daemon=True)
         else:
+            # Suppress per-line logs; only keep buffers
             out_prefix = f"[gen][{label}][out]" if label else "[gen][out]"
-            t_out = Thread(target=_stream_pipe, args=(proc.stdout, out_prefix, out_buf), daemon=True)
+            t_out = Thread(target=_stream_pipe, args=(proc.stdout, out_prefix, out_buf, False), daemon=True)
         err_prefix = f"[gen][{label}][err]" if label else "[gen][err]"
-        t_err = Thread(target=_stream_pipe, args=(proc.stderr, err_prefix, err_buf), daemon=True)
+        t_err = Thread(target=_stream_pipe, args=(proc.stderr, err_prefix, err_buf, False), daemon=True)
         t_out.start()
         t_err.start()
         try:
