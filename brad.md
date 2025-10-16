@@ -1,83 +1,107 @@
 # Project Chimera Deployment & Distillation Playbook
 
-This guide walks through the full lifecycle for the Chimera nanochat stack: provisioning an Azure GPU environment, running the hypertraining pipeline, distilling to a deployable artifact, and standing up lightweight inference on a VPS. The instructions assume familiarity with Linux, Azure, and basic MLOps tooling.
+This guide walks through the full lifecycle for the Chimera nanochat stack: provisioning a Vast.ai GPU environment, running the hypertraining pipeline, distilling to a deployable artifact, and standing up lightweight inference on a VPS. The instructions assume familiarity with Linux, Docker, and basic MLOps tooling.
 
 ---
 
-## 1. Provision Azure GPU Capacity
+## 1. Provision Vast.ai GPU Capacity
 
 ### 1.1 Prerequisites
-- Azure subscription with quota for ND H100 v5 or equivalent 8×H100 SKU.
-- Azure CLI ≥ 2.50 installed locally (`curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash`).
+- Vast.ai account (sign up at https://vast.ai).
 - SSH keypair (`ssh-keygen -t ed25519 -C "chimera-train"`).
-- Resource group (e.g. `chimera-rg`) in the target region that supports H-series GPUs (EastUS, WestEurope, etc.).
+- Sufficient account balance (~$40-80 for 4-hour training run, depending on GPU selection).
+- Basic familiarity with Docker (Vast.ai instances run in containers).
 
-### 1.2 Check Quota & Request Increases
+### 1.2 Select GPU Instance
+Log into Vast.ai and search for instances:
+1. **Filter criteria:**
+   - GPU: 8×H100 (80GB) preferred, or 8×A100 (80GB) as fallback.
+   - CUDA Version: ≥12.0.
+   - Disk Space: ≥500 GB (preferably 1 TB for tokenizer shards + checkpoints).
+   - Bandwidth: ≥100 Mbps upload (for syncing artifacts).
+   - Reliability Score: ≥95% to minimize interruptions.
+   - Docker Image: `pytorch/pytorch:latest` or Ubuntu-based image with CUDA pre-installed.
+
+2. **Sort by:**
+   - $/hr (ascending) to find best value.
+   - DLPerf score for performance benchmarks.
+
+3. **Recommended filters via CLI (optional):**
 ```bash
-az login
-az account set --subscription "YOUR-SUBSCRIPTION"
-az vm list-usage --location eastus | grep -i h100
-```
-If quota is insufficient, submit an Azure support request for the chosen VM SKU (e.g. `Standard_ND96asr_v5`).
+# Install vastai CLI
+pip install vastai
+vastai set api-key YOUR_API_KEY
 
-### 1.3 Create Networking & Storage
-```bash
-LOCATION="eastus"
-RG="chimera-rg"
-VNET="chimera-vnet"
-SUBNET="gpu-subnet"
-NSG="chimera-nsg"
-
-az group create --name $RG --location $LOCATION
-az network vnet create \
-  --resource-group $RG \
-  --name $VNET \
-  --address-prefixes 10.42.0.0/16 \
-  --subnet-name $SUBNET \
-  --subnet-prefix 10.42.1.0/24
-az network nsg create --resource-group $RG --name $NSG
-az network nsg rule create \
-  --resource-group $RG --nsg-name $NSG \
-  --name AllowSSH \
-  --priority 1000 --access Allow --direction Inbound \
-  --protocol Tcp --source-address-prefixes "*" \
-  --source-port-ranges "*" --destination-port-ranges 22
+# Search for 8×H100 instances
+vastai search offers 'num_gpus=8 gpu_name=H100 disk_space>=500 reliability>=0.95 cuda_max_good>=12.0'
 ```
 
-### 1.4 Spin Up the GPU VM
+### 1.3 Add Your SSH Public Key
+Before renting, add your SSH key to your Vast.ai account:
 ```bash
-VM="chimera-trainer"
-IMAGE="microsoft-dsvm:nvidia-gpu-optimized:ubuntu-2204:latest"  # includes drivers + CUDA
-SIZE="Standard_ND96asr_v5"  # 8×H100, 95GB GPU memory each
-
-az vm create \
-  --resource-group $RG --name $VM \
-  --image $IMAGE \
-  --size $SIZE \
-  --ssh-key-values ~/.ssh/chimera-train.pub \
-  --vnet-name $VNET --subnet $SUBNET \
-  --nsg $NSG --public-ip-sku Standard
-
-az vm extension set \
-  --publisher Microsoft.HpcCompute --name nvidia-gpu-driver-linux \
-  --vm-name $VM --resource-group $RG
+cat ~/.ssh/chimera-train.pub
 ```
-Capture the public IP:
+Copy the output and paste it in **Account → SSH Keys** on the Vast.ai web console.
+
+### 1.4 Rent & Launch the Instance
+Via Web UI:
+1. Click **RENT** on your selected instance.
+2. Choose **On-demand** (interruptible is cheaper but risky for 4-hour runs).
+3. Set **Image**: `pytorch/pytorch:2.1.0-cuda12.1-cudnn8-devel` or similar.
+4. Set **Disk Space**: 500-1000 GB.
+5. Launch instance.
+
+Via CLI:
 ```bash
-az vm show -d -g $RG -n $VM --query publicIps -o tsv
+# Rent instance (replace INSTANCE_ID with the ID from search results)
+vastai create instance INSTANCE_ID \
+  --image pytorch/pytorch:2.1.0-cuda12.1-cudnn8-devel \
+  --disk 1000 \
+  --onstart-cmd "apt update && apt install -y git tmux htop"
+
+# Check instance status
+vastai show instances
 ```
 
-### 1.5 Harden & Snapshot
-- Restrict NSG to trusted IP ranges once tested.
-- Enable boot diagnostics and capture an OS disk snapshot for rollback (`az snapshot create ...`).
+### 1.5 Connect via SSH
+Once the instance status shows **running**, note the SSH command:
+```bash
+# Vast.ai provides a custom SSH command, typically:
+ssh -p PORT_NUMBER root@INSTANCE_IP -L 8080:localhost:8080
+
+# Or retrieve connection details via CLI
+vastai ssh-url INSTANCE_ID
+```
+
+Example:
+```bash
+ssh -p 12345 root@123.45.67.89 -i ~/.ssh/chimera-train
+```
+
+### 1.6 Verify GPU Setup
+Once connected:
+```bash
+nvidia-smi  # Should show 8×H100 or 8×A100
+nvcc --version  # Confirm CUDA toolkit version
+df -h  # Verify disk space
+```
+
+### 1.7 Cost Management & Snapshots
+- **Monitor spending:** Check Vast.ai dashboard regularly; instances bill by the minute.
+- **Auto-shutdown:** Set a `tmux` session with a shutdown timer if needed:
+  ```bash
+  echo "sudo poweroff" | at now + 5 hours
+  ```
+- **Save progress:** Vast.ai doesn't offer native snapshots; use rsync or cloud storage (S3, Dropbox, rclone) to back up checkpoints periodically.
 
 ---
 
 ## 2. Prepare the Training Environment
 
-### 2.1 SSH Into the VM
+### 2.1 SSH Into the Instance
 ```bash
-ssh -i ~/.ssh/chimera-train ubuntu@<GPU_PUBLIC_IP>
+# Use the connection details from Vast.ai (usually root user in Docker containers)
+ssh -p <PORT> -i ~/.ssh/chimera-train root@<INSTANCE_IP>
 ```
 
 ### 2.2 System Prep
@@ -90,9 +114,10 @@ nvidia-smi
 
 ### 2.3 Clone & Configure nanochat
 ```bash
-cd /mnt
-sudo mkdir -p /mnt/chimera && sudo chown $USER:$USER /mnt/chimera
-cd /mnt/chimera
+# Vast.ai instances typically mount large storage at /workspace
+cd /workspace
+mkdir -p chimera
+cd chimera
 git clone https://github.com/YOUR-FORK/nanochat.git
 cd nanochat
 ```
@@ -131,7 +156,7 @@ Optionally, warm the cache:
 
 ### 3.1 Launch the Speedrun
 ```bash
-cd /mnt/chimera/nanochat
+cd /workspace/chimera/nanochat
 bash speedrun.sh | tee speedrun.log
 ```
 Key checkpoints:
@@ -151,10 +176,17 @@ Key checkpoints:
 - `~/.cache/nanochat/chatdpo_checkpoints/d*/` (preference model).
 - `report/report.md`, `report/chat-dpo.md`, `datasets/*.jsonl` (for reproducibility).
 - Speedrun log.
-Consider rsync to Azure Blob Storage:
+Consider syncing to cloud storage before terminating the instance:
 ```bash
-az storage azcopy blob upload -c checkpoints --account-name <acct> \
-  --source ~/.cache/nanochat/chatdpo_checkpoints --destination-path chimera-dpo/
+# Option 1: rsync to remote server
+rsync -avz ~/.cache/nanochat/chatdpo_checkpoints user@your-server:/backup/chimera-dpo/
+
+# Option 2: rclone to S3/GCS/Dropbox
+rclone copy ~/.cache/nanochat/chatdpo_checkpoints remote:chimera-dpo/ --progress
+
+# Option 3: tar and download via scp
+tar -czf chimera-checkpoints.tar.gz ~/.cache/nanochat/*_checkpoints report/
+# Then from local machine: scp -P <PORT> root@<IP>:/workspace/chimera/nanochat/chimera-checkpoints.tar.gz .
 ```
 
 ---
@@ -262,9 +294,11 @@ sudo systemctl enable --now chimera.service
 ---
 
 ## 6. Operational Checklist
-- [ ] Azure VM quota confirmed & NSG locked down.
+- [ ] Vast.ai instance rented with sufficient disk space & 8×GPU configuration verified.
+- [ ] SSH access confirmed and tmux session started for stability.
 - [ ] `OPENROUTER_API_KEY` functional (test via `python -m scripts.synthetic_data_gen --sft-examples 2 --dpo-examples 2`).
-- [ ] Speedrun completed; `report/report.md` archived.
+- [ ] Speedrun completed; `report/report.md` archived and checkpoints backed up.
+- [ ] Instance terminated after successful backup (to avoid ongoing charges).
 - [ ] Student/distilled model evaluated vs. teacher metrics.
 - [ ] Quantised artifact validated for latency on target hardware.
 - [ ] VPS hardened (fail2ban, firewall rules, automatic updates).
@@ -274,7 +308,9 @@ sudo systemctl enable --now chimera.service
 ## 7. Troubleshooting Tips
 - **Synthetic generation throttled:** adjust `OPENROUTER_MODELS` list, lower concurrency (script is serialised by default), or cache intermediate outputs.
 - **CUDA OOM during DPO:** reduce `device_batch_size`, lower `target_examples_per_step`, or shorten `max_length`.
-- **Azure VM preemption:** NDv5 SKUs are pay-as-you-go; for reserved savings use 1-year reservation or scale set with Spot (not recommended for the 4-hour run).
+- **Vast.ai instance interruption:** Choose "On-demand" over "Interruptible" for critical runs. If interrupted, rent a new instance and resume from the last checkpoint saved in `~/.cache/nanochat/`.
+- **Disk space exhausted:** Monitor with `df -h`; delete intermediate tokenizer shards after training or request larger disk when renting.
+- **SSH connection drops:** Always use `tmux` or `screen` to keep processes running. Reconnect with `tmux attach`.
 - **VPS latency spikes:** ensure swap is disabled or sized appropriately; use 4-bit quantisation or streaming KV-cache for long responses.
 
 ---
@@ -295,7 +331,8 @@ python -m scripts.synthetic_data_gen --sft-examples 1000 --dpo-examples 2000 --s
 ```
 
 ### 8.2 Cost Snapshot (reference)
-- ND96asr_v5 @ ~$44/hr → speedrun (~4h) ≈ $176.
+- Vast.ai 8×H100 (80GB): ~$8–15/hr depending on availability → speedrun (~4h) ≈ $32–60.
+- Vast.ai 8×A100 (80GB): ~$5–10/hr → speedrun (~4h) ≈ $20–40 (if H100 unavailable).
 - OpenRouter usage depends on model choice; budget for ~15k requests (SFT + DPO). Consider caching outputs if rerunning.
 - VPS (16 GB RAM, dedicated vCPU) ≈ $20–40/mo.
 
