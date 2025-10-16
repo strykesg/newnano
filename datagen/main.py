@@ -301,6 +301,8 @@ def generator_loop():
                 parts: list[tuple[int, int]] = list(zip(sft_parts, dpo_parts))
                 print(f"[datagen] worker parts: {parts}")
 
+                STATE["last_mode"] = "celery" if use_celery else "local"
+                STATE["last_workers"] = workers
                 if use_celery:
                     try:
                         from .tasks import generate_batch  # lazy import
@@ -310,6 +312,7 @@ def generator_loop():
                                 continue
                             task = generate_batch.delay(int(s), int(p))
                             task_ids.append(task.id)
+                        STATE["last_enqueued_tasks"] = len(task_ids)
                         STATE["last_exit_code"] = 0
                         print(f"[datagen] enqueued {len(task_ids)} celery tasks: {task_ids}")
                     except Exception as err:  # noqa: BLE001
