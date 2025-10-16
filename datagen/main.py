@@ -110,7 +110,7 @@ def _stream_pipe(pipe, prefix: str, buffer: list[str]) -> None:
             pass
 
 
-def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = False) -> int:
+def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = False, label: str = "") -> int:
     """Run the generator script once to add the requested number of samples.
 
     Returns the process return code.
@@ -151,7 +151,8 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
                     if not line:
                         break
                     line_stripped = line.rstrip()
-                    print(f"[gen][out] {line_stripped}")
+                    prefix = f"[gen][{label}][out]" if label else "[gen][out]"
+                    print(f"{prefix} {line_stripped}")
                     try:
                         obj = json.loads(line_stripped)
                     except Exception:
@@ -168,8 +169,10 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
                             wf.write("\n")
             t_out = Thread(target=consume_and_write, daemon=True)
         else:
-            t_out = Thread(target=_stream_pipe, args=(proc.stdout, "[gen][out]", out_buf), daemon=True)
-        t_err = Thread(target=_stream_pipe, args=(proc.stderr, "[gen][err]", err_buf), daemon=True)
+            out_prefix = f"[gen][{label}][out]" if label else "[gen][out]"
+            t_out = Thread(target=_stream_pipe, args=(proc.stdout, out_prefix, out_buf), daemon=True)
+        err_prefix = f"[gen][{label}][err]" if label else "[gen][err]"
+        t_err = Thread(target=_stream_pipe, args=(proc.stderr, err_prefix, err_buf), daemon=True)
         t_out.start()
         t_err.start()
         try:
@@ -217,10 +220,13 @@ def generator_loop():
 
             if add_sft > 0 or add_dpo > 0:
                 STATE["last_run_started_at"] = time.time()
-                print(f"[datagen] starting run: add_sft={add_sft} add_dpo={add_dpo} current=({cur_sft},{cur_dpo})")
                 workers = max(1, int(os.environ.get("WORKERS", "1")))
+                print(
+                    f"[datagen] starting run: add_sft={add_sft} add_dpo={add_dpo} current=({cur_sft},{cur_dpo}) "
+                    f"workers={workers} poll={get_poll_secs()}s"
+                )
                 if workers == 1:
-                    rc = run_generator_once(add_sft, add_dpo)
+                    rc = run_generator_once(add_sft, add_dpo, label="w1/1")
                     STATE["last_exit_code"] = rc
                 else:
                     # Split work across workers as evenly as possible
@@ -233,15 +239,18 @@ def generator_loop():
                         parts.append((s, p))
                         rem_sft -= s
                         rem_dpo -= p
+                    print(f"[datagen] worker parts: {parts}")
                     threads: list[Thread] = []
                     results: list[int] = []
-                    def run_part(s: int, p: int):
-                        rc_i = run_generator_once(s, p, emit_mode=True)
+                    def run_part(idx: int, s: int, p: int):
+                        label = f"w{idx+1}/{workers}"
+                        print(f"[datagen] launching {label} sft={s} dpo={p}")
+                        rc_i = run_generator_once(s, p, emit_mode=True, label=label)
                         results.append(rc_i)
-                    for s, p in parts:
+                    for idx, (s, p) in enumerate(parts):
                         if s <= 0 and p <= 0:
                             continue
-                        t = Thread(target=run_part, args=(s, p), daemon=True)
+                        t = Thread(target=run_part, args=(idx, s, p), daemon=True)
                         threads.append(t)
                         t.start()
                     for t in threads:
