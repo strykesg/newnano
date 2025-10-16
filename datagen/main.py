@@ -226,6 +226,9 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
                 assert proc.stdout is not None
                 sft_written = 0
                 dpo_written = 0
+                # Snapshot current counts and targets to enforce hard caps during this run
+                start_sft, start_dpo = current_line_counts()
+                tgt_sft, tgt_dpo = desired_sizes()
                 for line in iter(proc.stdout.readline, ""):
                     if not line:
                         break
@@ -242,6 +245,11 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
                         # Skip invalid
                         if label:
                             print(f"[datagen] {label} skipped invalid record")
+                        continue
+                    # Enforce target ceilings: skip SFT/DPO if their targets are already met for this cycle
+                    if is_sft and tgt_sft > 0 and (start_sft + sft_written) >= tgt_sft:
+                        continue
+                    if is_dpo and tgt_dpo > 0 and (start_dpo + dpo_written) >= tgt_dpo:
                         continue
                     target_path = (
                         get_dataset_dir() / ("trader_sft_data.jsonl" if is_sft else "trader_dpo_data.jsonl")
@@ -452,6 +460,15 @@ def ingest(record: dict = Body(...)):
     if not is_sft and not is_dpo:
         STATE["ingest_rejected_total"] += 1
         return {"ok": False, "error": "invalid record"}
+    # Enforce ceilings at ingestion time to avoid overshooting
+    tgt_sft, tgt_dpo = desired_sizes()
+    cur_sft, cur_dpo = current_line_counts()
+    if is_sft and tgt_sft > 0 and cur_sft >= tgt_sft:
+        STATE["ingest_rejected_total"] += 1
+        return {"ok": False, "error": "sft target reached"}
+    if is_dpo and tgt_dpo > 0 and cur_dpo >= tgt_dpo:
+        STATE["ingest_rejected_total"] += 1
+        return {"ok": False, "error": "dpo target reached"}
     target_path = (
         get_dataset_dir() / ("trader_sft_data.jsonl" if is_sft else "trader_dpo_data.jsonl")
     )
