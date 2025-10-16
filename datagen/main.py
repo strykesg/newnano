@@ -13,9 +13,25 @@ import uvicorn
 
 # We will call into the existing generator script via subprocess to avoid importing heavy deps at module import time
 import subprocess
+from contextlib import asynccontextmanager
 
 
-app = FastAPI(title="Nanochat Data Generation Service")
+def get_poll_secs() -> int:
+    try:
+        return max(1, int(os.environ.get("DATAGEN_POLL_SECS", "60")))
+    except Exception:
+        return 60
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Startup: kick off background thread
+    _start_background_thread()
+    yield
+    # Shutdown: nothing required; daemon thread will exit with process
+
+
+app = FastAPI(title="Nanochat Data Generation Service", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -99,13 +115,24 @@ def generator_loop():
             add_sft = max(0, target_sft - cur_sft)
             add_dpo = max(0, target_dpo - cur_dpo)
 
+            # If targets are zero, allow incremental generation via *_INCREMENT envs (defaults to 0)
+            if target_sft == 0 and target_dpo == 0:
+                inc_sft = int(os.environ.get("SFT_INCREMENT", os.environ.get("SFT_TARGET_INCREMENT", "0")))
+                inc_dpo = int(os.environ.get("DPO_INCREMENT", os.environ.get("DPO_TARGET_INCREMENT", "0")))
+                add_sft = max(add_sft, inc_sft)
+                add_dpo = max(add_dpo, inc_dpo)
+
             if add_sft > 0 or add_dpo > 0:
                 STATE["last_run_started_at"] = time.time()
+                print(f"[datagen] starting run: add_sft={add_sft} add_dpo={add_dpo} current=({cur_sft},{cur_dpo})")
                 rc = run_generator_once(add_sft, add_dpo)
                 STATE["last_exit_code"] = rc
                 STATE["last_run_finished_at"] = time.time()
+                print(f"[datagen] finished run: rc={rc}")
+            else:
+                print(f"[datagen] no work: targets=({target_sft},{target_dpo}) current=({cur_sft},{cur_dpo})")
             # Sleep a bit before checking again
-            time.sleep(int(os.environ.get("DATAGEN_POLL_SECS", "60")))
+            time.sleep(get_poll_secs())
     finally:
         STATE["running"] = False
 
@@ -113,6 +140,15 @@ def generator_loop():
 # Mount static hosting of the datasets directory at /datasets
 datasets_dir = get_dataset_dir()
 app.mount("/datasets", StaticFiles(directory=str(datasets_dir)), name="datasets")
+
+
+@app.get("/")
+def index():
+    return {
+        "message": "nanochat datagen",
+        "status": "/status",
+        "datasets": "/datasets/",
+    }
 
 
 @app.get("/status")
@@ -130,17 +166,13 @@ def status():
         "last_exit_code": STATE["last_exit_code"],
         "last_run_started_at": STATE["last_run_started_at"],
         "last_run_finished_at": STATE["last_run_finished_at"],
+        "poll_secs": get_poll_secs(),
     }
 
 
 def _start_background_thread():
     t = threading.Thread(target=generator_loop, daemon=True)
     t.start()
-
-
-@app.on_event("startup")
-def on_startup():
-    _start_background_thread()
 
 
 if __name__ == "__main__":
