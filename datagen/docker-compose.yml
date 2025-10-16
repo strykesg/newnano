@@ -53,7 +53,7 @@ services:
       - REDIS_URL=${REDIS_URL}
       - PORT=8981
       - CELERY_TOTAL_CONCURRENCY=${CELERY_TOTAL_CONCURRENCY:-20}
-    command: sh -c 'echo "Starting Celery worker with total concurrency ${CELERY_TOTAL_CONCURRENCY:-20}"; celery -A datagen.celery_app.celery_app worker --loglevel=INFO --concurrency="${CELERY_TOTAL_CONCURRENCY:-20}"'
+    command: sh -c 'echo "Starting Celery worker with total concurrency ${CELERY_TOTAL_CONCURRENCY:-20}"; celery -A datagen.celery_app.celery_app worker -E --loglevel=INFO --concurrency="${CELERY_TOTAL_CONCURRENCY:-20}"'
     restart: unless-stopped
 
 volumes:
