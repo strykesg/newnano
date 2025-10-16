@@ -111,6 +111,37 @@ def _stream_pipe(pipe, prefix: str, buffer: list[str], print_lines: bool = True)
             pass
 
 
+def _is_valid_sft(record: dict) -> bool:
+    if not isinstance(record, dict):
+        return False
+    messages = record.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return False
+    for msg in messages:
+        if not isinstance(msg, dict):
+            return False
+        role = msg.get("role")
+        content = msg.get("content")
+        if role not in {"system", "user", "assistant"}:
+            return False
+        if not isinstance(content, str) or not content.strip():
+            return False
+    return True
+
+
+def _is_valid_dpo(record: dict) -> bool:
+    if not isinstance(record, dict):
+        return False
+    prompt = record.get("prompt")
+    chosen = record.get("chosen")
+    rejected = record.get("rejected")
+    if not all(isinstance(x, str) and x.strip() for x in [prompt, chosen, rejected]):
+        return False
+    if chosen.strip() == rejected.strip():
+        return False
+    return True
+
+
 def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = False, label: str = "") -> int:
     """Run the generator script once to add the requested number of samples.
 
@@ -159,16 +190,22 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
                     except Exception:
                         out_buf.append(line)
                         continue
-                    # Select target file based on record shape
-                    if isinstance(obj, dict) and "messages" in obj:
-                        target_path = get_dataset_dir() / "trader_sft_data.jsonl"
-                    else:
-                        target_path = get_dataset_dir() / "trader_dpo_data.jsonl"
+                    # Validate and select target file
+                    is_sft = _is_valid_sft(obj)
+                    is_dpo = _is_valid_dpo(obj) if not is_sft else False
+                    if not is_sft and not is_dpo:
+                        # Skip invalid
+                        if label:
+                            print(f"[datagen] {label} skipped invalid record")
+                        continue
+                    target_path = (
+                        get_dataset_dir() / ("trader_sft_data.jsonl" if is_sft else "trader_dpo_data.jsonl")
+                    )
                     with WRITE_LOCK:
                         with target_path.open("a", encoding="utf-8") as wf:
                             wf.write(json.dumps(obj, ensure_ascii=False))
                             wf.write("\n")
-                    if target_path.name.startswith("trader_sft_"):
+                    if is_sft:
                         sft_written += 1
                     else:
                         dpo_written += 1
@@ -234,8 +271,9 @@ def generator_loop():
                     f"[datagen] starting run: add_sft={add_sft} add_dpo={add_dpo} current=({cur_sft},{cur_dpo}) "
                     f"workers={workers} poll={get_poll_secs()}s"
                 )
+                # Always use emit mode so records pass through validation and serialized writes
                 if workers == 1:
-                    rc = run_generator_once(add_sft, add_dpo, label="w1/1")
+                    rc = run_generator_once(add_sft, add_dpo, emit_mode=True, label="w1/1")
                     STATE["last_exit_code"] = rc
                 else:
                     # Split work across workers as evenly as possible
