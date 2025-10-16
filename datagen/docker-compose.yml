@@ -10,8 +10,8 @@ services:
       # OpenRouter credentials and metadata
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_MODELS=${OPENROUTER_MODELS:-}
-      - OPENROUTER_REFERRER=${OPENROUTER_REFERRER:-https://github.com/eureka-labs/nanochat}
-      - OPENROUTER_TITLE=${OPENROUTER_TITLE:-nanochat-chimera}
+      - OPENROUTER_REFERRER=${OPENROUTER_REFERRER:-BRADDLEZ}
+      - OPENROUTER_TITLE=${OPENROUTER_TITLE:-OOGA}
       # Dataset targets
       - SFT_TARGET=${SFT_TARGET:-0}
       - DPO_TARGET=${DPO_TARGET:-0}
@@ -20,9 +20,7 @@ services:
       - NANOCHAT_BASE_DIR=/data
       # Server options
       - HOST=0.0.0.0
-      - PORT=8000
-    ports:
-      - "8000:8000"
+      - PORT=8981
     volumes:
       - datagen_data:/data
     restart: unless-stopped
