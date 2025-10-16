@@ -379,9 +379,8 @@ torchrun --standalone --nproc_per_node=8 -m scripts.dpo_train -- --run=$WANDB_RU
 # Evaluate DPO checkpoint directly
 python -m scripts.chat_eval -i dpo -g d20 -a "ARC-Easy|GSM8K" --dtype float32
 
-# Regenerate synthetic data with a different teacher persona
-OPENROUTER_MODELS="openai/gpt-4o" \
-python -m scripts.synthetic_data_gen --sft-examples 1000 --dpo-examples 2000 --seed 2025
+# Download our synthetic data to be used
+python -m scripts.fetch_datasets --out-dir ~/.cache/nanochat/datasets
 ```
 
 ### 8.2 Cost Snapshot (reference)
