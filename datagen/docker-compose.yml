@@ -4,7 +4,7 @@ services:
       context: ..
       dockerfile: datagen/Dockerfile
       args:
-        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13.0t-alpine}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim}
     image: nanochat-datagen:latest
     container_name: nanochat-datagen
     environment:
