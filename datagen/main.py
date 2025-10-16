@@ -108,15 +108,31 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int) -> int:
     env = os.environ.copy()
     # Ensure dataset dir exists per NANOCHAT_BASE_DIR
     get_dataset_dir()
-    proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
-    if proc.returncode != 0:
+    # Allow a max runtime per cycle to avoid long blocking runs
+    max_seconds = int(os.environ.get("MAX_RUN_SECONDS", "600"))
+    try:
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=max_seconds)
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            rc = 124  # timeout code
+            print(f"[datagen] generator timed out after {max_seconds}s; will continue next cycle")
+    except Exception as err:  # noqa: BLE001
+        stdout, stderr = "", f"spawn error: {err}"
+        rc = 1
+    if rc != 0:
         # Surface error to container logs
-        print(proc.stdout)
-        print(proc.stderr)
+        if stdout:
+            print(stdout)
+        if stderr:
+            print(stderr)
     # Store limited logs for diagnostics
-    STATE["last_stdout"] = proc.stdout[-8000:]
-    STATE["last_stderr"] = proc.stderr[-8000:]
-    return proc.returncode
+    STATE["last_stdout"] = (stdout or "")[-8000:]
+    STATE["last_stderr"] = (stderr or "")[-8000:]
+    return rc
 
 
 def generator_loop():
