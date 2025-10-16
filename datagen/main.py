@@ -170,6 +170,7 @@ def index():
 
 
 @app.get("/status")
+@app.get("/status/")
 def status():
     target_sft, target_dpo = desired_sizes()
     cur_sft, cur_dpo = current_line_counts()
@@ -212,6 +213,8 @@ def test_write_access(path: Path) -> tuple[bool, Optional[str]]:
 
 
 @app.get("/diagnostics")
+@app.get("/diagnostics/")
+@app.get("/diag")
 def diagnostics():
     dataset = get_dataset_dir()
     writable, write_error = test_write_access(dataset)
@@ -242,6 +245,11 @@ def diagnostics():
         "last_stdout_tail": STATE["last_stdout"],
         "last_stderr_tail": STATE["last_stderr"],
     }
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
 
 
 def _start_background_thread():
