@@ -276,16 +276,16 @@ def generator_loop():
                     rc = run_generator_once(add_sft, add_dpo, emit_mode=True, label="w1/1")
                     STATE["last_exit_code"] = rc
                 else:
-                    # Split work across workers as evenly as possible
-                    parts: list[tuple[int, int]] = []
-                    rem_sft, rem_dpo = add_sft, add_dpo
-                    for i in range(workers):
-                        remaining_workers = workers - i
-                        s = rem_sft // remaining_workers
-                        p = rem_dpo // remaining_workers
-                        parts.append((s, p))
-                        rem_sft -= s
-                        rem_dpo -= p
+                    # Determine active workers based on available work
+                    active = max(add_sft, add_dpo)
+                    active_workers = min(workers, max(1, active))
+                    def split_count(total: int, n: int) -> list[int]:
+                        base = total // n
+                        rem = total % n
+                        return [base + (1 if i < rem else 0) for i in range(n)]
+                    sft_parts = split_count(add_sft, active_workers)
+                    dpo_parts = split_count(add_dpo, active_workers)
+                    parts: list[tuple[int, int]] = list(zip(sft_parts, dpo_parts))
                     print(f"[datagen] worker parts: {parts}")
                     threads: list[Thread] = []
                     results: list[int] = []
