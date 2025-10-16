@@ -26,11 +26,6 @@ services:
     volumes:
       - datagen_data:/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "python -c 'import os,sys,urllib.request; url=f\"http://127.0.0.1:{os.environ.get(\"PORT\",\"8981\")}/status\"; sys.exit(0 if urllib.request.urlopen(url).status==200 else 1)' "]
-      interval: 30s
-      timeout: 5s
-      retries: 3
 
 volumes:
   datagen_data:
