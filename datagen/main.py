@@ -53,6 +53,16 @@ STATE = {
     "last_run_finished_at": None,
     "last_stdout": "",
     "last_stderr": "",
+    # Metrics
+    "sft_written_total": 0,
+    "dpo_written_total": 0,
+    "ingest_requests_total": 0,
+    "ingest_rejected_total": 0,
+    "lock_acquire_count": 0,
+    "lock_wait_ms_total": 0.0,
+    "last_mode": "local",
+    "last_workers": 1,
+    "last_enqueued_tasks": 0,
 }
 
 
@@ -202,10 +212,14 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
                     target_path = (
                         get_dataset_dir() / ("trader_sft_data.jsonl" if is_sft else "trader_dpo_data.jsonl")
                     )
+                    # Timed, metered write with lock
+                    t0 = time.time()
+                    STATE["lock_acquire_count"] += 1
                     with WRITE_LOCK:
                         with target_path.open("a", encoding="utf-8") as wf:
                             wf.write(json.dumps(obj, ensure_ascii=False))
                             wf.write("\n")
+                    STATE["lock_wait_ms_total"] += (time.time() - t0) * 1000.0
                     if is_sft:
                         sft_written += 1
                     else:
@@ -213,6 +227,8 @@ def run_generator_once(sft_to_add: int, dpo_to_add: int, *, emit_mode: bool = Fa
                 # Completion summary per worker
                 if label:
                     print(f"[datagen] {label} completed: sft={sft_written} dpo={dpo_written}")
+                STATE["sft_written_total"] += sft_written
+                STATE["dpo_written_total"] += dpo_written
             t_out = Thread(target=consume_and_write, daemon=True)
         else:
             # Suppress per-line logs; only keep buffers
@@ -382,14 +398,19 @@ def ingest(record: dict = Body(...)):
     is_sft = _is_valid_sft(record)
     is_dpo = _is_valid_dpo(record) if not is_sft else False
     if not is_sft and not is_dpo:
+        STATE["ingest_rejected_total"] += 1
         return {"ok": False, "error": "invalid record"}
     target_path = (
         get_dataset_dir() / ("trader_sft_data.jsonl" if is_sft else "trader_dpo_data.jsonl")
     )
+    t0 = time.time()
+    STATE["lock_acquire_count"] += 1
     with WRITE_LOCK:
         with target_path.open("a", encoding="utf-8") as wf:
             wf.write(json.dumps(record, ensure_ascii=False))
             wf.write("\n")
+    STATE["lock_wait_ms_total"] += (time.time() - t0) * 1000.0
+    STATE["ingest_requests_total"] += 1
     return {"ok": True, "type": "sft" if is_sft else "dpo"}
 
 
