@@ -118,7 +118,7 @@ nvidia-smi
 cd /workspace
 mkdir -p chimera
 cd chimera
-git clone https://github.com/YOUR-FORK/nanochat.git
+git clone https://github.com/strykesg/newnano.git
 cd nanochat
 ```
 Set critical environment variables in `~/.bashrc` (or `.zshrc`):
@@ -188,6 +188,60 @@ rclone copy ~/.cache/nanochat/chatdpo_checkpoints remote:chimera-dpo/ --progress
 tar -czf chimera-checkpoints.tar.gz ~/.cache/nanochat/*_checkpoints report/
 # Then from local machine: scp -P <PORT> root@<IP>:/workspace/chimera/nanochat/chimera-checkpoints.tar.gz .
 ```
+
+### 3.4 Archive & Download (Final Steps)
+
+When the GPU run is near completion, archive only the GPU-generated artifacts or the full working directory, then download to your local machine.
+
+- Archive only GPU outputs (recommended):
+  - Tokenizer
+  ```bash
+  tar -czf ~/tokenizer_$(date +%Y%m%d_%H%M%S).tar.gz -C ~/.cache/nanochat tokenizer
+  ```
+  - Datasets (SFT/DPO)
+  ```bash
+  tar -czf ~/datasets_$(date +%Y%m%d_%H%M%S).tar.gz -C ~/.cache/nanochat datasets
+  ```
+  - Checkpoints (create each if present)
+  ```bash
+  for D in base_checkpoints mid_checkpoints chatsft_checkpoints chatdpo_checkpoints; do
+    [ -d "$HOME/.cache/nanochat/$D" ] && \
+      tar -czf ~/${D}_$(date +%Y%m%d_%H%M%S).tar.gz -C ~/.cache/nanochat "$D" || true;
+  done
+  ```
+
+- Download archives to local (replace <PORT> and <IP>):
+  ```bash
+  # From your local machine
+  scp -P <PORT> root@<IP>:~/tokenizer_*.tar.gz .
+  scp -P <PORT> root@<IP>:~/datasets_*.tar.gz .
+  scp -P <PORT> root@<IP>:~/{base,mid,chat*sft,chat*dpo}_checkpoints_*.tar.gz . 2>/dev/null || true
+  ```
+
+- Optionally, archive the full repo+cache working set:
+  ```bash
+  # On the GPU server
+  TS=$(date +%Y%m%d_%H%M%S)
+  BDIR=/root/nanochat_bundle_$TS
+  BUNDLE=/root/nanochat_bundle_$TS.tar.gz
+  rm -rf "$BDIR" && mkdir -p "$BDIR"
+  rsync -a /workspace/chimera/nanochat/ "$BDIR"/nanochat/
+  rsync -a ~/.cache/nanochat/        "$BDIR"/cache/
+  tar -czf "$BUNDLE" -C /root "nanochat_bundle_$TS"
+  
+  # From your local machine
+  scp -P <PORT> root@<IP>:/root/nanochat_bundle_*.tar.gz .
+  ```
+
+- After download, extract locally and place under your cache if needed:
+  ```bash
+  tar -xzf tokenizer_*.tar.gz
+  tar -xzf datasets_*.tar.gz
+  mkdir -p ~/.cache/nanochat
+  rsync -a tokenizer ~/.cache/nanochat/
+  rsync -a datasets ~/.cache/nanochat/
+  # (and extracted *_checkpoints as desired)
+  ```
 
 ---
 
