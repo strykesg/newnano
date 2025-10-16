@@ -67,6 +67,13 @@ def desired_sizes() -> tuple[int, int]:
     return sft_target, dpo_target
 
 
+def desired_increments() -> tuple[int, int]:
+    # Support two names for convenience
+    inc_sft = int(os.environ.get("SFT_INCREMENT", os.environ.get("SFT_TARGET_INCREMENT", "0")))
+    inc_dpo = int(os.environ.get("DPO_INCREMENT", os.environ.get("DPO_TARGET_INCREMENT", "0")))
+    return max(0, inc_sft), max(0, inc_dpo)
+
+
 def current_line_counts() -> tuple[int, int]:
     data_dir = get_dataset_dir()
     sft_path = data_dir / "trader_sft_data.jsonl"
@@ -115,12 +122,12 @@ def generator_loop():
             add_sft = max(0, target_sft - cur_sft)
             add_dpo = max(0, target_dpo - cur_dpo)
 
-            # If targets are zero, allow incremental generation via *_INCREMENT envs (defaults to 0)
-            if target_sft == 0 and target_dpo == 0:
-                inc_sft = int(os.environ.get("SFT_INCREMENT", os.environ.get("SFT_TARGET_INCREMENT", "0")))
-                inc_dpo = int(os.environ.get("DPO_INCREMENT", os.environ.get("DPO_TARGET_INCREMENT", "0")))
-                add_sft = max(add_sft, inc_sft)
-                add_dpo = max(add_dpo, inc_dpo)
+            inc_sft, inc_dpo = desired_increments()
+            # If there is no remaining target work for a split, fall back to increments
+            if add_sft == 0 and inc_sft > 0:
+                add_sft = inc_sft
+            if add_dpo == 0 and inc_dpo > 0:
+                add_dpo = inc_dpo
 
             if add_sft > 0 or add_dpo > 0:
                 STATE["last_run_started_at"] = time.time()
@@ -130,7 +137,10 @@ def generator_loop():
                 STATE["last_run_finished_at"] = time.time()
                 print(f"[datagen] finished run: rc={rc}")
             else:
-                print(f"[datagen] no work: targets=({target_sft},{target_dpo}) current=({cur_sft},{cur_dpo})")
+                print(
+                    f"[datagen] no work: targets=({target_sft},{target_dpo}) current=({cur_sft},{cur_dpo}) "
+                    f"incs=({inc_sft},{inc_dpo})"
+                )
             # Sleep a bit before checking again
             time.sleep(get_poll_secs())
     finally:
