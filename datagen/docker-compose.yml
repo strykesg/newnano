@@ -52,18 +52,8 @@ services:
       - OPENROUTER_TITLE=${OPENROUTER_TITLE:-OOGA}
       - REDIS_URL=${REDIS_URL}
       - PORT=8981
-      - CELERY_CONCURRENCY=${CELERY_CONCURRENCY:-4}
-      - CELERY_INSTANCES=${CELERY_INSTANCES:-5}
-    command: sh -c '
-      inst="${CELERY_INSTANCES:-5}"; case "$inst" in ''|*[!0-9]*) inst=5 ;; esac;
-      conc="${CELERY_CONCURRENCY:-4}"; case "$conc" in ''|*[!0-9]*) conc=4 ;; esac;
-      i=1;
-      while [ "$i" -le "$inst" ]; do
-        echo "Starting Celery worker $i/$inst with concurrency $conc";
-        celery -A datagen.celery_app.celery_app worker --loglevel=INFO --concurrency="$conc" --hostname="%h-w$i" &
-        i=$((i+1));
-      done;
-      wait'
+      - CELERY_TOTAL_CONCURRENCY=${CELERY_TOTAL_CONCURRENCY:-20}
+    command: sh -c 'echo "Starting Celery worker with total concurrency ${CELERY_TOTAL_CONCURRENCY:-20}"; celery -A datagen.celery_app.celery_app worker --loglevel=INFO --concurrency="${CELERY_TOTAL_CONCURRENCY:-20}"'
     restart: unless-stopped
 
 volumes:
